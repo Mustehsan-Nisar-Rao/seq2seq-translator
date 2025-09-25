@@ -1,9 +1,9 @@
 import streamlit as st
 import torch
 import sentencepiece as spm
-import requests
 import os
-from model import create_model  # import from your model.py
+import requests
+from model import create_model  # Make sure model.py is in the same folder
 
 # =========================
 # Page Configuration
@@ -16,58 +16,66 @@ st.set_page_config(
 )
 
 # =========================
-# Download model from GitHub releases if not present
+# File paths and URLs
 # =========================
-def download_model(model_url, model_path):
-    try:
-        st.info("Downloading model file...")
-        response = requests.get(model_url, stream=True)
-        response.raise_for_status()
-        total_size = int(response.headers.get('content-length', 0))
-        chunk_size = 1024 * 1024  # 1 MB
-        with open(model_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size):
-                f.write(chunk)
-        st.success("Model downloaded successfully!")
-    except Exception as e:
-        st.error(f"Failed to download model: {e}")
+BASE_DIR = os.path.dirname(__file__)
+SP_MODEL_PATH = os.path.join(BASE_DIR, "joint_char.model")
+MODEL_PATH = os.path.join(BASE_DIR, "best_model.pth")
+GITHUB_RELEASE_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/best_model.pth"
 
 # =========================
-# Load Tokenizer
+# Helper: Download model if missing
+# =========================
+def download_model(url, dest_path):
+    try:
+        st.info(f"Downloading model from GitHub releases...")
+        response = requests.get(url, stream=True)
+        total_size = int(response.headers.get('content-length', 0))
+        with open(dest_path, "wb") as f:
+            for data in response.iter_content(chunk_size=1024*1024):
+                f.write(data)
+        st.success("✅ Model downloaded successfully!")
+        return True
+    except Exception as e:
+        st.error(f"Failed to download model: {e}")
+        return False
+
+# =========================
+# Load tokenizer
 # =========================
 @st.cache_resource
 def load_tokenizer():
-    try:
-        SP_MODEL = "joint_char.model"
-        sp = spm.SentencePieceProcessor()
-        sp.load(SP_MODEL)
-        return sp
-    except Exception as e:
-        st.error(f"Error loading tokenizer: {e}")
+    if not os.path.exists(SP_MODEL_PATH):
+        st.error(f"Tokenizer not found at {SP_MODEL_PATH}. Please place joint_char.model in the app folder.")
         return None
+    sp = spm.SentencePieceProcessor()
+    sp.load(SP_MODEL_PATH)
+    return sp
 
 # =========================
-# Load Model
+# Load model
 # =========================
 @st.cache_resource
 def load_model(_sp):
-    MODEL_PATH = "best_model.pth"
-    GITHUB_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/best_model.pth"
-
-    # Download model if not exists
-    if not os.path.isfile(MODEL_PATH):
-        download_model(GITHUB_MODEL_URL, MODEL_PATH)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     INPUT_DIM = _sp.get_piece_size()
     OUTPUT_DIM = _sp.get_piece_size()
-    
+
     model = create_model(INPUT_DIM, OUTPUT_DIM, device)
+    
+    # Download if missing
+    if not os.path.exists(MODEL_PATH):
+        success = download_model(GITHUB_RELEASE_URL, MODEL_PATH)
+        if not success:
+            return None, None
 
     try:
-        # Load full checkpoint for PyTorch 2.6+
-        checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        checkpoint = torch.load(MODEL_PATH, map_location=device)
+        # Supports both full checkpoint and state_dict
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint)
         model.eval()
         model.to(device)
         return model, device
@@ -85,12 +93,12 @@ else:
     model, device = None, None
 
 # =========================
-# Translation function
+# Inference function
 # =========================
 def translate_sentence(sentence, max_len=50):
     if sp is None or model is None:
         return "Error: Model or tokenizer not loaded properly"
-    
+
     try:
         tokens = sp.encode(sentence, out_type=int)
         src_tensor = torch.LongTensor(tokens).unsqueeze(1).to(device)
@@ -121,6 +129,7 @@ def translate_sentence(sentence, max_len=50):
 st.title("🧠 Seq2Seq Translator")
 st.markdown("---")
 
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
     max_length = st.slider("Maximum translation length", 10, 100, 50)
@@ -137,6 +146,7 @@ with st.sidebar:
     - Real-time inference
     """)
 
+# Main content
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -148,23 +158,23 @@ with col1:
         key="input_text"
     )
     
-    # Quick examples
+    # Example texts for quick testing
     st.markdown("**Quick examples:**")
     example_col1, example_col2, example_col3 = st.columns(3)
     with example_col1:
-        if st.button("Hello", use_container_width=True):
+        if st.button("Hello"):
             st.session_state.input_text = "Hello"
     with example_col2:
-        if st.button("Thank you", use_container_width=True):
+        if st.button("Thank you"):
             st.session_state.input_text = "Thank you"
     with example_col3:
-        if st.button("How are you?", use_container_width=True):
+        if st.button("How are you?"):
             st.session_state.input_text = "How are you?"
 
 with col2:
     st.subheader("📤 Translation Result")
     
-    if st.button("🚀 Translate", type="primary", use_container_width=True):
+    if st.button("🚀 Translate", type="primary"):
         if not user_input.strip():
             st.warning("⚠️ Please enter some text to translate.")
         elif sp is None or model is None:
@@ -196,6 +206,7 @@ with col2:
                         except:
                             pass
 
+# Footer
 st.markdown("---")
 st.markdown(
     """
@@ -207,7 +218,7 @@ st.markdown(
     }
     </style>
     <div class="footer">
-        Built with Streamlit • Powered by PyTorch • SentencePiece Tokenizer
+        Built with Streamlit • PyTorch • SentencePiece Tokenizer
     </div>
     """,
     unsafe_allow_html=True
