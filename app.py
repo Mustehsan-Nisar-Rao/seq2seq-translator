@@ -1,7 +1,7 @@
 import streamlit as st
 import torch
 import sentencepiece as spm
-from model import create_model  # import your model creation function
+from model import create_model  # import from model.py
 
 # =========================
 # Page Configuration
@@ -20,7 +20,7 @@ st.set_page_config(
 def load_tokenizer():
     """Load sentencepiece tokenizer with error handling"""
     try:
-        SP_MODEL = "joint_char.model"  # ensure this file is present
+        SP_MODEL = "joint_char.model"
         sp = spm.SentencePieceProcessor()
         sp.load(SP_MODEL)
         return sp
@@ -30,20 +30,24 @@ def load_tokenizer():
 
 @st.cache_resource
 def load_model(_sp):
-    """Load the trained model checkpoint safely"""
+    """Load the trained model safely (full checkpoint)"""
     try:
-        MODEL_PATH = "best_model.pth"  # ensure this file is present
+        MODEL_PATH = "best_model.pth"
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         INPUT_DIM = _sp.get_piece_size()
         OUTPUT_DIM = _sp.get_piece_size()
-        
+
         model = create_model(INPUT_DIM, OUTPUT_DIM, device)
-        
-        # Load full checkpoint (not weights_only) to avoid PyTorch 2.6 error
+
+        # Load full checkpoint
         checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            # fallback if it's already a state_dict
+            model.load_state_dict(checkpoint)
+
         model.eval()
         model.to(device)
         return model, device
@@ -126,7 +130,7 @@ with col1:
         key="input_text"
     )
     
-    # Quick example buttons
+    # Example texts for quick testing
     st.markdown("**Quick examples:**")
     example_col1, example_col2, example_col3 = st.columns(3)
     with example_col1:
@@ -166,6 +170,8 @@ with col2:
                     with st.expander("🔍 Translation Details"):
                         st.write(f"**Input length:** {len(user_input)} characters")
                         st.write(f"**Output length:** {len(translation)} characters")
+                        
+                        # Show tokenization details
                         try:
                             input_tokens = sp.encode(user_input, out_type=str)
                             output_tokens = sp.encode(translation, out_type=str)
@@ -191,3 +197,4 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+s
