@@ -1,9 +1,9 @@
 import streamlit as st
 import torch
 import sentencepiece as spm
-from model import create_model  # import from model.py
-import os
 import requests
+import os
+from model import create_model  # import from your model.py
 
 # =========================
 # Page Configuration
@@ -16,30 +16,21 @@ st.set_page_config(
 )
 
 # =========================
-# Paths and URLs
+# Download model from GitHub releases if not present
 # =========================
-MODEL_FILENAME = "best_model.pth"
-MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/best_model.pth"
-SP_MODEL = "joint_char.model"
-
-# =========================
-# Utility: Download file if missing
-# =========================
-def download_file(url, local_path):
+def download_model(model_url, model_path):
     try:
-        if not os.path.exists(local_path):
-            st.info(f"Downloading model: {local_path} ...")
-            response = requests.get(url, stream=True)
-            total_size = int(response.headers.get('content-length', 0))
-            with open(local_path, 'wb') as f:
-                downloaded = 0
-                for data in response.iter_content(1024*1024):
-                    downloaded += len(data)
-                    f.write(data)
-                    st.progress(min(downloaded/total_size,1.0))
-            st.success("Download completed!")
+        st.info("Downloading model file...")
+        response = requests.get(model_url, stream=True)
+        response.raise_for_status()
+        total_size = int(response.headers.get('content-length', 0))
+        chunk_size = 1024 * 1024  # 1 MB
+        with open(model_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size):
+                f.write(chunk)
+        st.success("Model downloaded successfully!")
     except Exception as e:
-        st.error(f"Error downloading file: {e}")
+        st.error(f"Failed to download model: {e}")
 
 # =========================
 # Load Tokenizer
@@ -47,6 +38,7 @@ def download_file(url, local_path):
 @st.cache_resource
 def load_tokenizer():
     try:
+        SP_MODEL = "joint_char.model"
         sp = spm.SentencePieceProcessor()
         sp.load(SP_MODEL)
         return sp
@@ -59,13 +51,23 @@ def load_tokenizer():
 # =========================
 @st.cache_resource
 def load_model(_sp):
-    download_file(MODEL_URL, MODEL_FILENAME)
+    MODEL_PATH = "best_model.pth"
+    GITHUB_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/best_model.pth"
+
+    # Download model if not exists
+    if not os.path.isfile(MODEL_PATH):
+        download_model(GITHUB_MODEL_URL, MODEL_PATH)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    INPUT_DIM = _sp.get_piece_size()
+    OUTPUT_DIM = _sp.get_piece_size()
+    
+    model = create_model(INPUT_DIM, OUTPUT_DIM, device)
+
     try:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        INPUT_DIM = _sp.get_piece_size()
-        OUTPUT_DIM = _sp.get_piece_size()
-        model = create_model(INPUT_DIM, OUTPUT_DIM, device)
-        model.load_state_dict(torch.load(MODEL_FILENAME, map_location=device))
+        # Load full checkpoint for PyTorch 2.6+
+        checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
         model.eval()
         model.to(device)
         return model, device
@@ -74,16 +76,16 @@ def load_model(_sp):
         return None, None
 
 # =========================
-# Load Resources
+# Load resources
 # =========================
 sp = load_tokenizer()
-if sp is not None:
+if sp:
     model, device = load_model(sp)
 else:
     model, device = None, None
 
 # =========================
-# Translation Function
+# Translation function
 # =========================
 def translate_sentence(sentence, max_len=50):
     if sp is None or model is None:
@@ -99,7 +101,7 @@ def translate_sentence(sentence, max_len=50):
             cell = cell.unsqueeze(0).repeat(model.decoder.rnn.num_layers, 1, 1)
 
         trg_indexes = [sp.bos_id()]
-        for i in range(max_len):
+        for _ in range(max_len):
             trg_tensor = torch.LongTensor([trg_indexes[-1]]).to(device)
             with torch.no_grad():
                 output, hidden, cell = model.decoder(trg_tensor, hidden, cell, encoder_outputs)
@@ -119,7 +121,6 @@ def translate_sentence(sentence, max_len=50):
 st.title("🧠 Seq2Seq Translator")
 st.markdown("---")
 
-# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
     max_length = st.slider("Maximum translation length", 10, 100, 50)
@@ -136,7 +137,6 @@ with st.sidebar:
     - Real-time inference
     """)
 
-# Main content
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -148,7 +148,7 @@ with col1:
         key="input_text"
     )
     
-    # Example texts for quick testing
+    # Quick examples
     st.markdown("**Quick examples:**")
     example_col1, example_col2, example_col3 = st.columns(3)
     with example_col1:
@@ -188,8 +188,6 @@ with col2:
                     with st.expander("🔍 Translation Details"):
                         st.write(f"**Input length:** {len(user_input)} characters")
                         st.write(f"**Output length:** {len(translation)} characters")
-                        
-                        # Show tokenization details
                         try:
                             input_tokens = sp.encode(user_input, out_type=str)
                             output_tokens = sp.encode(translation, out_type=str)
@@ -198,7 +196,6 @@ with col2:
                         except:
                             pass
 
-# Footer
 st.markdown("---")
 st.markdown(
     """
