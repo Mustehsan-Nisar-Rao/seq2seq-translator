@@ -14,12 +14,13 @@ st.set_page_config(
 )
 
 # =========================
-# Load Tokenizer
+# Load Resources with Caching
 # =========================
 @st.cache_resource
 def load_tokenizer():
+    """Load sentencepiece tokenizer with error handling"""
     try:
-        SP_MODEL = "joint_char.model"
+        SP_MODEL = "joint_char.model"  # ensure this file is present
         sp = spm.SentencePieceProcessor()
         sp.load(SP_MODEL)
         return sp
@@ -27,31 +28,31 @@ def load_tokenizer():
         st.error(f"Error loading tokenizer: {e}")
         return None
 
-# =========================
-# Load Model (weights only)
-# =========================
 @st.cache_resource
 def load_model(_sp):
+    """Load the trained model checkpoint safely"""
     try:
-        MODEL_PATH = "best_model.pth"  # Only model.state_dict saved
+        MODEL_PATH = "best_model.pth"  # ensure this file is present
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+        
         INPUT_DIM = _sp.get_piece_size()
         OUTPUT_DIM = _sp.get_piece_size()
-
+        
         model = create_model(INPUT_DIM, OUTPUT_DIM, device)
-        # Safe loading for PyTorch 2.6+
-        state_dict = torch.load(MODEL_PATH, map_location=device, weights_only=True)
-        model.load_state_dict(state_dict)
-        model.to(device)
+        
+        # Load full checkpoint (not weights_only) to avoid PyTorch 2.6 error
+        checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
         model.eval()
+        model.to(device)
         return model, device
     except Exception as e:
         st.error(f"Error loading model: {e}")
         return None, None
 
 # =========================
-# Load resources
+# Load Resources
 # =========================
 sp = load_tokenizer()
 if sp is not None:
@@ -60,7 +61,7 @@ else:
     model, device = None, None
 
 # =========================
-# Inference
+# Inference function
 # =========================
 def translate_sentence(sentence, max_len=50):
     if sp is None or model is None:
@@ -76,7 +77,7 @@ def translate_sentence(sentence, max_len=50):
             cell = cell.unsqueeze(0).repeat(model.decoder.rnn.num_layers, 1, 1)
 
         trg_indexes = [sp.bos_id()]
-        for _ in range(max_len):
+        for i in range(max_len):
             trg_tensor = torch.LongTensor([trg_indexes[-1]]).to(device)
             with torch.no_grad():
                 output, hidden, cell = model.decoder(trg_tensor, hidden, cell, encoder_outputs)
@@ -129,19 +130,19 @@ with col1:
     st.markdown("**Quick examples:**")
     example_col1, example_col2, example_col3 = st.columns(3)
     with example_col1:
-        if st.button("Hello"):
+        if st.button("Hello", use_container_width=True):
             st.session_state.input_text = "Hello"
     with example_col2:
-        if st.button("Thank you"):
+        if st.button("Thank you", use_container_width=True):
             st.session_state.input_text = "Thank you"
     with example_col3:
-        if st.button("How are you?"):
+        if st.button("How are you?", use_container_width=True):
             st.session_state.input_text = "How are you?"
 
 with col2:
     st.subheader("📤 Translation Result")
     
-    if st.button("🚀 Translate", type="primary"):
+    if st.button("🚀 Translate", type="primary", use_container_width=True):
         if not user_input.strip():
             st.warning("⚠️ Please enter some text to translate.")
         elif sp is None or model is None:
