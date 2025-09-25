@@ -32,7 +32,7 @@ def load_tokenizer():
 def load_model(_sp):
     """Load the trained model with error handling"""
     try:
-        MODEL_PATH = "best_model.pkt"
+        MODEL_PATH = "best_model.pth"
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         INPUT_DIM = _sp.get_piece_size()
