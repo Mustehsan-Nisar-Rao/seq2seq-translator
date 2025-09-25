@@ -10,10 +10,12 @@ import os
 # =========================
 MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/best_model.pth"
 MODEL_PATH = "best_model.pth"
+
+SP_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/joint_char.model"
 SP_MODEL_PATH = "joint_char.model"
 
 # =========================
-# Download model if not exists
+# Utility: Download file if not exists
 # =========================
 def download_file(url, local_path):
     if not os.path.exists(local_path):
@@ -44,7 +46,6 @@ def load_model(model_path, sp):
     output_dim = sp.get_piece_size()
     model = create_model(input_dim, output_dim, device)
     
-    # Load checkpoint
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     
@@ -53,10 +54,24 @@ def load_model(model_path, sp):
     return model, device
 
 # =========================
-# Main logic
+# Ensure files are downloaded
 # =========================
 download_file(MODEL_URL, MODEL_PATH)
-sp = load_tokenizer(SP_MODEL_PATH)
-model, device = load_model(MODEL_PATH, sp)
+download_file(SP_MODEL_URL, SP_MODEL_PATH)
+
+# =========================
+# Load resources
+# =========================
+try:
+    sp = load_tokenizer(SP_MODEL_PATH)
+except Exception as e:
+    st.error(f"Error loading tokenizer: {e}")
+    st.stop()
+
+try:
+    model, device = load_model(MODEL_PATH, sp)
+except Exception as e:
+    st.error(f"Error loading model: {e}")
+    st.stop()
 
 st.success("Model and tokenizer loaded successfully ✅")
