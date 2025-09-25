@@ -1,7 +1,7 @@
 import streamlit as st
 import torch
 import sentencepiece as spm
-from model import create_model  # import from model.py
+from model import create_model  # your Seq2Seq model
 
 # =========================
 # Page Configuration
@@ -14,13 +14,12 @@ st.set_page_config(
 )
 
 # =========================
-# Load Resources with Caching
+# Load Tokenizer with Caching
 # =========================
 @st.cache_resource
 def load_tokenizer():
-    """Load sentencepiece tokenizer with error handling"""
     try:
-        SP_MODEL = "joint_char.model"
+        SP_MODEL = "joint_char.model"  # make sure this file exists
         sp = spm.SentencePieceProcessor()
         sp.load(SP_MODEL)
         return sp
@@ -28,35 +27,30 @@ def load_tokenizer():
         st.error(f"Error loading tokenizer: {e}")
         return None
 
+# =========================
+# Load Model with Caching (state_dict)
+# =========================
 @st.cache_resource
 def load_model(_sp):
-    """Load the trained model safely (full checkpoint)"""
     try:
-        MODEL_PATH = "best_model.pth"
+        MODEL_PATH = "best_model.pth"  # should contain 'model_state_dict'
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         INPUT_DIM = _sp.get_piece_size()
         OUTPUT_DIM = _sp.get_piece_size()
 
         model = create_model(INPUT_DIM, OUTPUT_DIM, device)
-
-        # Load full checkpoint
-        checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
-        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            # fallback if it's already a state_dict
-            model.load_state_dict(checkpoint)
-
-        model.eval()
+        checkpoint = torch.load(MODEL_PATH, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
         model.to(device)
+        model.eval()
         return model, device
     except Exception as e:
         st.error(f"Error loading model: {e}")
         return None, None
 
 # =========================
-# Load Resources
+# Load resources
 # =========================
 sp = load_tokenizer()
 if sp is not None:
@@ -70,7 +64,7 @@ else:
 def translate_sentence(sentence, max_len=50):
     if sp is None or model is None:
         return "Error: Model or tokenizer not loaded properly"
-    
+
     try:
         tokens = sp.encode(sentence, out_type=int)
         src_tensor = torch.LongTensor(tokens).unsqueeze(1).to(device)
@@ -90,7 +84,7 @@ def translate_sentence(sentence, max_len=50):
             if pred_token == sp.eos_id():
                 break
 
-        translated = sp.decode(trg_indexes[1:-1])  # remove <bos> and <eos>
+        translated = sp.decode(trg_indexes[1:-1])
         return translated
     except Exception as e:
         return f"Translation error: {str(e)}"
@@ -101,24 +95,19 @@ def translate_sentence(sentence, max_len=50):
 st.title("🧠 Seq2Seq Translator")
 st.markdown("---")
 
-# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
     max_length = st.slider("Maximum translation length", 10, 100, 50)
     show_details = st.checkbox("Show translation details", value=False)
-    
     st.markdown("---")
     st.header("ℹ️ About")
     st.info("""
     This app uses a Sequence-to-Sequence model with attention for translation.
-    
-    **Features:**
     - Character-level translation
     - Attention mechanism
     - Real-time inference
     """)
 
-# Main content
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -130,23 +119,22 @@ with col1:
         key="input_text"
     )
     
-    # Example texts for quick testing
+    # Quick examples
     st.markdown("**Quick examples:**")
-    example_col1, example_col2, example_col3 = st.columns(3)
-    with example_col1:
-        if st.button("Hello", use_container_width=True):
+    ex1, ex2, ex3 = st.columns(3)
+    with ex1:
+        if st.button("Hello"):
             st.session_state.input_text = "Hello"
-    with example_col2:
-        if st.button("Thank you", use_container_width=True):
+    with ex2:
+        if st.button("Thank you"):
             st.session_state.input_text = "Thank you"
-    with example_col3:
-        if st.button("How are you?", use_container_width=True):
+    with ex3:
+        if st.button("How are you?"):
             st.session_state.input_text = "How are you?"
 
 with col2:
     st.subheader("📤 Translation Result")
-    
-    if st.button("🚀 Translate", type="primary", use_container_width=True):
+    if st.button("🚀 Translate", type="primary"):
         if not user_input.strip():
             st.warning("⚠️ Please enter some text to translate.")
         elif sp is None or model is None:
@@ -154,24 +142,15 @@ with col2:
         else:
             with st.spinner("Translating..."):
                 translation = translate_sentence(user_input, max_len=max_length)
-            
             if translation.startswith("Error:"):
                 st.error(translation)
             else:
                 st.success("✅ Translation completed!")
-                st.text_area(
-                    "Translation:",
-                    translation,
-                    height=150,
-                    key="output_text"
-                )
-                
+                st.text_area("Translation:", translation, height=150, key="output_text")
                 if show_details:
                     with st.expander("🔍 Translation Details"):
                         st.write(f"**Input length:** {len(user_input)} characters")
                         st.write(f"**Output length:** {len(translation)} characters")
-                        
-                        # Show tokenization details
                         try:
                             input_tokens = sp.encode(user_input, out_type=str)
                             output_tokens = sp.encode(translation, out_type=str)
@@ -180,21 +159,16 @@ with col2:
                         except:
                             pass
 
-# Footer
 st.markdown("---")
-st.markdown(
-    """
-    <style>
-    .footer {
-        text-align: center;
-        color: gray;
-        font-size: 0.8em;
-    }
-    </style>
-    <div class="footer">
-        Built with Streamlit • Powered by PyTorch • SentencePiece Tokenizer
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-s
+st.markdown("""
+<style>
+.footer {
+    text-align: center;
+    color: gray;
+    font-size: 0.8em;
+}
+</style>
+<div class="footer">
+    Built with Streamlit • PyTorch • SentencePiece
+</div>
+""", unsafe_allow_html=True)
