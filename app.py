@@ -1,32 +1,17 @@
 import streamlit as st
 import torch
 import sentencepiece as spm
-from model import create_model  # import your model.py
-import os
-import requests
+from model import create_model  # import your model creation function
 
 # =========================
-# Configuration
+# Page Configuration
 # =========================
-MODEL_FILENAME = "best_model.pth"
-MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/best_model.pth"  # change to your actual release URL
-SP_MODEL_FILENAME = "joint_char.model"
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# =========================
-# Helper functions
-# =========================
-def download_file(url, local_path):
-    """Download file from URL if it does not exist."""
-    if not os.path.exists(local_path):
-        st.info(f"Downloading {local_path} ...")
-        r = requests.get(url, stream=True)
-        total_size = int(r.headers.get('content-length', 0))
-        chunk_size = 1024
-        with open(local_path, 'wb') as f:
-            for data in r.iter_content(chunk_size):
-                f.write(data)
-        st.success(f"{local_path} downloaded successfully!")
+st.set_page_config(
+    page_title="Seq2Seq Translator",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # =========================
 # Load Tokenizer
@@ -34,37 +19,48 @@ def download_file(url, local_path):
 @st.cache_resource
 def load_tokenizer():
     try:
-        if not os.path.exists(SP_MODEL_FILENAME):
-            st.error(f"Tokenizer file '{SP_MODEL_FILENAME}' not found!")
-            return None
+        SP_MODEL = "joint_char.model"
         sp = spm.SentencePieceProcessor()
-        sp.load(SP_MODEL_FILENAME)
+        sp.load(SP_MODEL)
         return sp
     except Exception as e:
         st.error(f"Error loading tokenizer: {e}")
         return None
 
 # =========================
-# Load Model
+# Load Model (weights only)
 # =========================
 @st.cache_resource
 def load_model(_sp):
     try:
-        download_file(MODEL_URL, MODEL_FILENAME)
+        MODEL_PATH = "best_model.pth"  # Only model.state_dict saved
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         INPUT_DIM = _sp.get_piece_size()
         OUTPUT_DIM = _sp.get_piece_size()
-        model = create_model(INPUT_DIM, OUTPUT_DIM, DEVICE)
-        state_dict = torch.load(MODEL_FILENAME, map_location=DEVICE)
+
+        model = create_model(INPUT_DIM, OUTPUT_DIM, device)
+        # Safe loading for PyTorch 2.6+
+        state_dict = torch.load(MODEL_PATH, map_location=device, weights_only=True)
         model.load_state_dict(state_dict)
+        model.to(device)
         model.eval()
-        model.to(DEVICE)
-        return model
+        return model, device
     except Exception as e:
         st.error(f"Error loading model: {e}")
-        return None
+        return None, None
 
 # =========================
-# Translation Function
+# Load resources
+# =========================
+sp = load_tokenizer()
+if sp is not None:
+    model, device = load_model(sp)
+else:
+    model, device = None, None
+
+# =========================
+# Inference
 # =========================
 def translate_sentence(sentence, max_len=50):
     if sp is None or model is None:
@@ -72,7 +68,7 @@ def translate_sentence(sentence, max_len=50):
     
     try:
         tokens = sp.encode(sentence, out_type=int)
-        src_tensor = torch.LongTensor([sp.bos_id()] + tokens + [sp.eos_id()]).unsqueeze(1).to(DEVICE)
+        src_tensor = torch.LongTensor(tokens).unsqueeze(1).to(device)
 
         with torch.no_grad():
             encoder_outputs, hidden, cell = model.encoder(src_tensor)
@@ -81,7 +77,7 @@ def translate_sentence(sentence, max_len=50):
 
         trg_indexes = [sp.bos_id()]
         for _ in range(max_len):
-            trg_tensor = torch.LongTensor([trg_indexes[-1]]).to(DEVICE)
+            trg_tensor = torch.LongTensor([trg_indexes[-1]]).to(device)
             with torch.no_grad():
                 output, hidden, cell = model.decoder(trg_tensor, hidden, cell, encoder_outputs)
             pred_token = output.argmax(1).item()
@@ -89,7 +85,7 @@ def translate_sentence(sentence, max_len=50):
             if pred_token == sp.eos_id():
                 break
 
-        translated = sp.decode(trg_indexes[1:-1])
+        translated = sp.decode(trg_indexes[1:-1])  # remove <bos> and <eos>
         return translated
     except Exception as e:
         return f"Translation error: {str(e)}"
@@ -97,14 +93,8 @@ def translate_sentence(sentence, max_len=50):
 # =========================
 # Streamlit UI
 # =========================
-st.set_page_config(page_title="Seq2Seq Translator", page_icon="🚀", layout="wide")
-
 st.title("🧠 Seq2Seq Translator")
 st.markdown("---")
-
-# Load resources
-sp = load_tokenizer()
-model = load_model(sp) if sp else None
 
 # Sidebar
 with st.sidebar:
@@ -123,16 +113,35 @@ with st.sidebar:
     - Real-time inference
     """)
 
-# Input and output
+# Main content
 col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("📥 Input Text")
-    user_input = st.text_area("Enter text to translate:", height=150)
+    user_input = st.text_area(
+        "Enter text to translate:",
+        placeholder="Type your text here...",
+        height=150,
+        key="input_text"
+    )
     
+    # Quick example buttons
+    st.markdown("**Quick examples:**")
+    example_col1, example_col2, example_col3 = st.columns(3)
+    with example_col1:
+        if st.button("Hello"):
+            st.session_state.input_text = "Hello"
+    with example_col2:
+        if st.button("Thank you"):
+            st.session_state.input_text = "Thank you"
+    with example_col3:
+        if st.button("How are you?"):
+            st.session_state.input_text = "How are you?"
+
 with col2:
     st.subheader("📤 Translation Result")
-    if st.button("🚀 Translate"):
+    
+    if st.button("🚀 Translate", type="primary"):
         if not user_input.strip():
             st.warning("⚠️ Please enter some text to translate.")
         elif sp is None or model is None:
@@ -145,7 +154,12 @@ with col2:
                 st.error(translation)
             else:
                 st.success("✅ Translation completed!")
-                st.text_area("Translation:", translation, height=150)
+                st.text_area(
+                    "Translation:",
+                    translation,
+                    height=150,
+                    key="output_text"
+                )
                 
                 if show_details:
                     with st.expander("🔍 Translation Details"):
@@ -163,8 +177,15 @@ with col2:
 st.markdown("---")
 st.markdown(
     """
-    <div style='text-align:center;color:gray;font-size:0.8em;'>
-        Built with Streamlit • PyTorch • SentencePiece
+    <style>
+    .footer {
+        text-align: center;
+        color: gray;
+        font-size: 0.8em;
+    }
+    </style>
+    <div class="footer">
+        Built with Streamlit • Powered by PyTorch • SentencePiece Tokenizer
     </div>
     """,
     unsafe_allow_html=True
