@@ -2,6 +2,8 @@ import streamlit as st
 import torch
 import sentencepiece as spm
 from model import create_model  # import from model.py
+import os
+import requests
 
 # =========================
 # Page Configuration
@@ -14,13 +16,37 @@ st.set_page_config(
 )
 
 # =========================
-# Load Resources with Caching
+# Paths and URLs
+# =========================
+MODEL_FILENAME = "best_model.pth"
+MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/best_model.pth"
+SP_MODEL = "joint_char.model"
+
+# =========================
+# Utility: Download file if missing
+# =========================
+def download_file(url, local_path):
+    try:
+        if not os.path.exists(local_path):
+            st.info(f"Downloading model: {local_path} ...")
+            response = requests.get(url, stream=True)
+            total_size = int(response.headers.get('content-length', 0))
+            with open(local_path, 'wb') as f:
+                downloaded = 0
+                for data in response.iter_content(1024*1024):
+                    downloaded += len(data)
+                    f.write(data)
+                    st.progress(min(downloaded/total_size,1.0))
+            st.success("Download completed!")
+    except Exception as e:
+        st.error(f"Error downloading file: {e}")
+
+# =========================
+# Load Tokenizer
 # =========================
 @st.cache_resource
 def load_tokenizer():
-    """Load sentencepiece tokenizer with error handling"""
     try:
-        SP_MODEL = "joint_char.model"
         sp = spm.SentencePieceProcessor()
         sp.load(SP_MODEL)
         return sp
@@ -28,18 +54,18 @@ def load_tokenizer():
         st.error(f"Error loading tokenizer: {e}")
         return None
 
+# =========================
+# Load Model
+# =========================
 @st.cache_resource
 def load_model(_sp):
-    """Load the trained model with error handling"""
+    download_file(MODEL_URL, MODEL_FILENAME)
     try:
-        MODEL_PATH = "best_model.pth"
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
         INPUT_DIM = _sp.get_piece_size()
         OUTPUT_DIM = _sp.get_piece_size()
-        
         model = create_model(INPUT_DIM, OUTPUT_DIM, device)
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+        model.load_state_dict(torch.load(MODEL_FILENAME, map_location=device))
         model.eval()
         model.to(device)
         return model, device
@@ -57,7 +83,7 @@ else:
     model, device = None, None
 
 # =========================
-# Inference function
+# Translation Function
 # =========================
 def translate_sentence(sentence, max_len=50):
     if sp is None or model is None:
