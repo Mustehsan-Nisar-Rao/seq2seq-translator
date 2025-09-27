@@ -346,7 +346,7 @@ with col1:
                     st.session_state.input_text = ""
                 st.session_state.input_text = example
     
-    if "input_text" not in st.session_state:
+if "input_text" not in st.session_state:
     st.session_state.input_text = ""
 
 user_input = st.text_area(
