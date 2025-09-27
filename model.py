@@ -43,10 +43,14 @@ class Attention(nn.Module):
 
     def forward(self, hidden, encoder_outputs):
         src_len = encoder_outputs.shape[0]
+        batch_size = encoder_outputs.shape[1]
+        
         hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
         encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
         attention = self.v(energy).squeeze(2)
+        
         return F.softmax(attention, dim=1)
 
 
@@ -85,7 +89,7 @@ class Decoder(nn.Module):
 
 
 # -----------------------------
-# Seq2Seq
+# Seq2Seq (Updated for Inference)
 # -----------------------------
 class Seq2Seq(nn.Module):
     def __init__(self, encoder, decoder, device):
@@ -95,7 +99,6 @@ class Seq2Seq(nn.Module):
         self.device = device
 
     def forward(self, src, trg, teacher_forcing_ratio=0.5):
-        # not required for inference, but kept for completeness
         batch_size = src.shape[1]
         trg_len = trg.shape[0]
         trg_vocab_size = self.decoder.output_dim
@@ -103,17 +106,52 @@ class Seq2Seq(nn.Module):
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).to(self.device)
 
         encoder_outputs, hidden, cell = self.encoder(src)
-        input = trg[0, :]
+        
+        # Prepare hidden and cell states for decoder
         hidden = hidden.unsqueeze(0).repeat(self.decoder.rnn.num_layers, 1, 1)
         cell = cell.unsqueeze(0).repeat(self.decoder.rnn.num_layers, 1, 1)
 
+        input = trg[0, :]
+        
         for t in range(1, trg_len):
             output, hidden, cell = self.decoder(input, hidden, cell, encoder_outputs)
             outputs[t] = output
+            teacher_force = random.random() < teacher_forcing_ratio
             top1 = output.argmax(1)
-            input = trg[t] if torch.rand(1).item() < teacher_forcing_ratio else top1
+            input = trg[t] if teacher_force else top1
 
         return outputs
+    
+    # New method for inference
+    def translate(self, src, max_len=50):
+        """Inference method for single sentence translation"""
+        self.eval()
+        with torch.no_grad():
+            # Add batch dimension
+            if src.dim() == 1:
+                src = src.unsqueeze(1)
+            
+            encoder_outputs, hidden, cell = self.encoder(src)
+            
+            # Prepare hidden and cell states for decoder
+            hidden = hidden.unsqueeze(0).repeat(self.decoder.rnn.num_layers, 1, 1)
+            cell = cell.unsqueeze(0).repeat(self.decoder.rnn.num_layers, 1, 1)
+            
+            # Start with SOS token
+            input = torch.tensor([self.decoder.embedding.weight.size(0) - 3]).to(self.device)  # SOS token
+            translated_tokens = []
+            
+            for _ in range(max_len):
+                output, hidden, cell = self.decoder(input, hidden, cell, encoder_outputs)
+                pred_token = output.argmax(1).item()
+                
+                if pred_token == self.decoder.embedding.weight.size(0) - 2:  # EOS token
+                    break
+                    
+                translated_tokens.append(pred_token)
+                input = torch.tensor([pred_token]).to(self.device)
+            
+            return translated_tokens
 
 
 # -----------------------------
