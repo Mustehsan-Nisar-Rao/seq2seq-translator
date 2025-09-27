@@ -326,4 +326,7 @@ st.markdown("""
 <div style="text-align: center; color: gray;">
     Built with ❤️ using Streamlit • PyTorch • SentencePiece
 </div>
+<div style="text-align: center; color: gray;">
+    Develop By: Mustehsan Nisar Rao
+</div>
 """, unsafe_allow_html=True)
