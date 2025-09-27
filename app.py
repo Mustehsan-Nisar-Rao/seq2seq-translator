@@ -346,14 +346,16 @@ with col1:
                     st.session_state.input_text = ""
                 st.session_state.input_text = example
     
-    # Text input
-    user_input = st.text_area(
-        "Enter text to translate:",
-        height=120,
-        value=st.session_state.get('input_text', ''),
-        placeholder="Type your text here...",
-        key="main_input"
-    )
+    if "input_text" not in st.session_state:
+    st.session_state.input_text = ""
+
+user_input = st.text_area(
+    "Enter text to translate:",
+    height=120,
+    placeholder="Type your text here...",
+    key="input_text"   # bind directly to session_state
+)
+
 
 with col2:
     st.subheader("📤 Translation Result")
