@@ -9,9 +9,8 @@ from model import create_model
 # =========================
 # Configuration
 # =========================
-SP_MODEL_URL = "https://github.com/YourUsername/seq2seq-translator/releases/download/v1/joint_char.model"
-MODEL_URL = "https://github.com/YourUsername/seq2seq-translator/releases/download/v1/best_model.pth"
-
+SP_MODEL_URL = "https://raw.githubusercontent.com/Mustehsan-Nisar-Rao/seq2seq-translator/main/joint_char.model"
+MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v.1/best_model.zip"
 SP_MODEL_PATH = "joint_char.model"
 MODEL_PATH = "best_model.pth"
 
