@@ -9,8 +9,8 @@ from model import create_model
 # =========================
 # Configuration
 # =========================
-SP_MODEL_URL = "https://github.com/YourUsername/seq2seq-translator/releases/download/v1/joint_char.model"
-MODEL_URL = "https://github.com/YourUsername/seq2seq-translator/releases/download/v1/best_model.pth"
+SP_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/joint_char.model"
+MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v1/best_model.pth"
 
 SP_MODEL_PATH = "joint_char.model"
 MODEL_PATH = "best_model.pth"
@@ -40,6 +40,7 @@ def download_file(url, local_path):
             
             progress_bar.empty()
             st.success(f"{os.path.basename(local_path)} downloaded successfully!")
+            return True
         except Exception as e:
             st.error(f"Failed to download {os.path.basename(local_path)}: {e}")
             return False
@@ -62,7 +63,7 @@ def load_tokenizer(sp_model_path):
         return None
 
 # =========================
-# Load Model
+# Load Model (UPDATED WITH weights_only=False)
 # =========================
 @st.cache_resource
 def load_model(_sp):
@@ -80,25 +81,73 @@ def load_model(_sp):
         model = create_model(INPUT_DIM, OUTPUT_DIM, DEVICE)
         
         st.info("🔄 Loading model weights...")
-        checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+        
+        # FIX: Added weights_only=False to handle PyTorch 2.6 compatibility
+        try:
+            # First try with weights_only=False (for PyTorch 2.6+)
+            checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
+        except TypeError:
+            # Fallback for older PyTorch versions
+            checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
         
         # Handle different checkpoint formats
         if 'model_state_dict' in checkpoint:
             model.load_state_dict(checkpoint['model_state_dict'])
+            st.success("✅ Loaded from full checkpoint (model_state_dict)")
         else:
             model.load_state_dict(checkpoint)
+            st.success("✅ Loaded from weights-only file")
             
         model.eval()
         model.to(DEVICE)
         st.success("✅ Model loaded successfully!")
         return model
+        
     except Exception as e:
         st.error(f"Error loading model: {e}")
-        st.error("Please check if the model file is compatible with the current architecture.")
+        
+        # Try alternative loading methods
+        st.info("🔄 Trying alternative loading methods...")
+        
+        try:
+            # Method 2: Try with pickle module directly
+            import pickle
+            with open(MODEL_PATH, 'rb') as f:
+                checkpoint = pickle.load(f)
+            
+            if 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                model.load_state_dict(checkpoint)
+                
+            model.eval()
+            model.to(DEVICE)
+            st.success("✅ Model loaded successfully with alternative method!")
+            return model
+        except Exception as e2:
+            st.error(f"Alternative loading failed: {e2}")
+            
+        try:
+            # Method 3: Try loading with specific encoding
+            checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, 
+                                  pickle_module=pickle, 
+                                  encoding='latin1')
+            if 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                model.load_state_dict(checkpoint)
+                
+            model.eval()
+            model.to(DEVICE)
+            st.success("✅ Model loaded with encoding workaround!")
+            return model
+        except Exception as e3:
+            st.error(f"Encoding workaround failed: {e3}")
+            
         return None
 
 # =========================
-# Translation function (Updated)
+# Translation function
 # =========================
 def translate_sentence(sentence, max_len=50):
     if sp is None or model is None:
@@ -163,12 +212,25 @@ st.set_page_config(
 # Load resources
 # =========================
 st.sidebar.title("🔧 Model Status")
-with st.sidebar:
-    with st.spinner("Loading tokenizer..."):
-        sp = load_tokenizer(SP_MODEL_PATH)
+
+# Initialize session state for loading status
+if 'resources_loaded' not in st.session_state:
+    st.session_state.resources_loaded = False
+
+if not st.session_state.resources_loaded:
+    with st.sidebar:
+        with st.spinner("Loading tokenizer..."):
+            sp = load_tokenizer(SP_MODEL_PATH)
+        
+        with st.spinner("Loading model..."):
+            model = load_model(sp)
     
-    with st.spinner("Loading model..."):
-        model = load_model(sp)
+    st.session_state.resources_loaded = True
+    st.session_state.sp = sp
+    st.session_state.model = model
+else:
+    sp = st.session_state.sp
+    model = st.session_state.model
 
 # Display model info in sidebar
 if sp is not None and model is not None:
@@ -178,6 +240,11 @@ if sp is not None and model is not None:
     st.sidebar.info(f"**Model parameters:** {sum(p.numel() for p in model.parameters()):,}")
 else:
     st.sidebar.error("❌ Failed to load components")
+    
+    # Add reload button if failed
+    if st.sidebar.button("🔄 Retry Loading"):
+        st.session_state.resources_loaded = False
+        st.rerun()
 
 # =========================
 # Streamlit UI
@@ -271,14 +338,6 @@ with col2:
                     except Exception as e:
                         st.warning(f"Could not display token details: {e}")
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style="text-align:center; color:gray; font-size:0.8em;">
-Built with ❤️ using Streamlit • PyTorch • SentencePiece
-</div>
-""", unsafe_allow_html=True)
-
 # Debug information (collapsible)
 with st.expander("🔧 Debug Information"):
     st.write(f"**Device:** {DEVICE}")
@@ -288,3 +347,21 @@ with st.expander("🔧 Debug Information"):
         st.write(f"**Vocabulary size:** {sp.get_piece_size()}")
     if model is not None:
         st.write(f"**Model parameters:** {sum(p.numel() for p in model.parameters()):,}")
+    
+    # Model architecture info
+    if model is not None:
+        st.write("**Model Architecture:**")
+        st.code(f"""
+        Encoder LSTM: {model.encoder.rnn.num_layers} layers
+        Decoder LSTM: {model.decoder.rnn.num_layers} layers  
+        Hidden dim: {model.encoder.rnn.hidden_size}
+        Embedding dim: {model.encoder.embedding.embedding_dim}
+        """)
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style="text-align:center; color:gray; font-size:0.8em;">
+Built with ❤️ using Streamlit • PyTorch • SentencePiece
+</div>
+""", unsafe_allow_html=True)
