@@ -262,13 +262,13 @@ def translate_sentence(sentence, max_len=50):
         
         # Decode the tokens to text
         # Safety: cut off anything after EOS
-if sp.eos_id() in translated_tokens:
-    eos_index = translated_tokens.index(sp.eos_id())
-    translated_tokens = translated_tokens[:eos_index]
-
-# Decode the tokens to text
-translated_text = sp.decode(translated_tokens) if translated_tokens else ""
-return translated_text.strip()
+                if sp.eos_id() in translated_tokens:
+                    eos_index = translated_tokens.index(sp.eos_id())
+                    translated_tokens = translated_tokens[:eos_index]
+                
+                # Decode the tokens to text
+                translated_text = sp.decode(translated_tokens) if translated_tokens else ""
+                return translated_text.strip()
 
         
     except Exception as e:
