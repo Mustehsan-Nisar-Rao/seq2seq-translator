@@ -11,7 +11,7 @@ from model import create_model
 # =========================
 SP_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/blob/main/joint_char.model"
 
-MODEL_ZIP_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/tag/v.1/best_model.zip"
+MODEL_ZIP_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v.1/best_model.zip"
 
 SP_MODEL_PATH = "joint_char.model"
 MODEL_ZIP_PATH = "best_model.zip"
