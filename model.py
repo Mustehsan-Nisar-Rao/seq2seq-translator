@@ -1,421 +1,146 @@
-import streamlit as st
 import torch
-import sentencepiece as spm
-import os
-import requests
-import zipfile
-from model import create_model
+import torch.nn as nn
+import torch.nn.functional as F
+import random  # Add this import
 
-# =========================
-# Configuration
-# =========================
-SP_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/blob/main/joint_char.model"
+# -----------------------------
+# Encoder
+# -----------------------------
+class Encoder(nn.Module):
+    def __init__(self, input_dim, emb_dim, enc_hid_dim, dec_hid_dim, n_layers=2, dropout=0.5):
+        super().__init__()
+        self.embedding = nn.Embedding(input_dim, emb_dim)
+        self.rnn = nn.LSTM(emb_dim, enc_hid_dim, n_layers,
+                          bidirectional=True, dropout=dropout, batch_first=False)
+        self.fc_hidden = nn.Linear(enc_hid_dim * 2, dec_hid_dim)
+        self.fc_cell = nn.Linear(enc_hid_dim * 2, dec_hid_dim)
+        self.dropout = nn.Dropout(dropout)
 
-MODEL_ZIP_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v.1/best_model.zip"
+    def forward(self, src):
+        embedded = self.dropout(self.embedding(src))
+        outputs, (hidden, cell) = self.rnn(embedded)
 
-SP_MODEL_PATH = "joint_char.model"
-MODEL_ZIP_PATH = "best_model.zip"
-MODEL_EXTRACTED_PATH = "best_model.pth"
+        hidden_forward = hidden[-2, :, :]
+        hidden_backward = hidden[-1, :, :]
+        hidden_concat = torch.cat((hidden_forward, hidden_backward), dim=1)
+        final_hidden = torch.tanh(self.fc_hidden(hidden_concat))
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        cell_forward = cell[-2, :, :]
+        cell_backward = cell[-1, :, :]
+        cell_concat = torch.cat((cell_forward, cell_backward), dim=1)
+        final_cell = torch.tanh(self.fc_cell(cell_concat))
 
-# =========================
-# Download and Extract ZIP
-# =========================
-def download_and_extract_model():
-    """Download ZIP file and extract the model"""
-    
-    # Check if model is already extracted and valid
-    if os.path.exists(MODEL_EXTRACTED_PATH):
-        file_size = os.path.getsize(MODEL_EXTRACTED_PATH)
-        if file_size > 100000:  # Model should be >100KB
-            st.success(f"✅ Model already available ({file_size:,} bytes)")
-            return MODEL_EXTRACTED_PATH
+        return outputs, final_hidden, final_cell
+
+
+# -----------------------------
+# Attention
+# -----------------------------
+class Attention(nn.Module):
+    def __init__(self, enc_hid_dim, dec_hid_dim):
+        super().__init__()
+        self.attn = nn.Linear(enc_hid_dim * 2 + dec_hid_dim, dec_hid_dim)
+        self.v = nn.Linear(dec_hid_dim, 1, bias=False)
+
+    def forward(self, hidden, encoder_outputs):
+        src_len = encoder_outputs.shape[0]
+        batch_size = encoder_outputs.shape[1]
+        
+        hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        
+        energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
+        attention = self.v(energy).squeeze(2)
+        
+        return F.softmax(attention, dim=1)
+
+
+# -----------------------------
+# Decoder
+# -----------------------------
+class Decoder(nn.Module):
+    def __init__(self, output_dim, emb_dim, enc_hid_dim, dec_hid_dim, n_layers=4, dropout=0.5, attention=None):
+        super().__init__()
+        self.output_dim = output_dim
+        self.attention = attention
+        self.embedding = nn.Embedding(output_dim, emb_dim)
+        self.rnn = nn.LSTM(emb_dim + enc_hid_dim * 2, dec_hid_dim, n_layers, dropout=dropout)
+        self.fc_out = nn.Linear(dec_hid_dim + enc_hid_dim * 2 + emb_dim, output_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, input, hidden, cell, encoder_outputs):
+        input = input.unsqueeze(0)
+        embedded = self.dropout(self.embedding(input))
+
+        a = self.attention(hidden[0], encoder_outputs)
+        a = a.unsqueeze(1)
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        weighted = torch.bmm(a, encoder_outputs)
+        weighted = weighted.permute(1, 0, 2)
+
+        rnn_input = torch.cat((embedded, weighted), dim=2)
+        output, (hidden, cell) = self.rnn(rnn_input, (hidden, cell))
+
+        output = output.squeeze(0)
+        weighted = weighted.squeeze(0)
+        embedded = embedded.squeeze(0)
+        prediction = self.fc_out(torch.cat((output, weighted, embedded), dim=1))
+
+        return prediction, hidden, cell
+
+
+# -----------------------------
+# Seq2Seq
+# -----------------------------
+class Seq2Seq(nn.Module):
+    def __init__(self, encoder, decoder, device):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.device = device
+
+    def forward(self, src, trg, teacher_forcing_ratio=0.5):
+        batch_size = src.shape[1]
+        trg_len = trg.shape[0]
+        trg_vocab_size = self.decoder.output_dim
+
+        outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).to(self.device)
+
+        encoder_outputs, hidden, cell = self.encoder(src)
+        
+        # Prepare hidden and cell states for decoder
+        hidden = hidden.unsqueeze(0).repeat(self.decoder.rnn.num_layers, 1, 1)
+        cell = cell.unsqueeze(0).repeat(self.decoder.rnn.num_layers, 1, 1)
+
+        input = trg[0, :]
+        
+        for t in range(1, trg_len):
+            output, hidden, cell = self.decoder(input, hidden, cell, encoder_outputs)
+            outputs[t] = output
+            teacher_force = random.random() < teacher_forcing_ratio
+            top1 = output.argmax(1)
+            input = trg[t] if teacher_force else top1
+
+        return outputs
+
+
+# -----------------------------
+# Helper to create model
+# -----------------------------
+def create_model(input_dim, output_dim, device, enc_hid_dim=512, dec_hid_dim=512,
+                 emb_dim=256, enc_layers=2, dec_layers=4, dropout=0.5):
+    attn = Attention(enc_hid_dim, dec_hid_dim)
+    encoder = Encoder(input_dim, emb_dim, enc_hid_dim, dec_hid_dim,
+                      n_layers=enc_layers, dropout=dropout)
+    decoder = Decoder(output_dim, emb_dim, enc_hid_dim, dec_hid_dim,
+                      n_layers=dec_layers, dropout=dropout, attention=attn)
+    model = Seq2Seq(encoder, decoder, device)
+
+    # weight initialization
+    for name, param in model.named_parameters():
+        if 'weight' in name:
+            nn.init.normal_(param.data, mean=0, std=0.01)
         else:
-            st.warning("⚠️ Existing model file seems small, re-downloading...")
-            os.remove(MODEL_EXTRACTED_PATH)
-    
-    # Download ZIP file if needed
-    if not os.path.exists(MODEL_ZIP_PATH):
-        try:
-            st.info("📥 Downloading model ZIP file...")
-            response = requests.get(MODEL_ZIP_URL, stream=True, timeout=60)
-            response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            with open(MODEL_ZIP_PATH, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progress = downloaded / total_size
-                            progress_bar.progress(progress)
-                            status_text.text(f"Downloaded: {downloaded:,}/{total_size:,} bytes")
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            # Verify download
-            final_size = os.path.getsize(MODEL_ZIP_PATH)
-            if total_size > 0 and final_size != total_size:
-                st.error("❌ Download incomplete")
-                return None
-                
-            st.success(f"✅ ZIP downloaded successfully! ({final_size:,} bytes)")
-            
-        except Exception as e:
-            st.error(f"❌ ZIP download failed: {e}")
-            return None
-    
-    # Extract the ZIP file
-    try:
-        st.info("📦 Extracting model from ZIP...")
-        
-        with zipfile.ZipFile(MODEL_ZIP_PATH, 'r') as zip_ref:
-            # List files in ZIP for debugging
-            file_list = zip_ref.namelist()
-            st.info(f"Files in ZIP: {file_list}")
-            
-            # Look for model files
-            model_files = [f for f in file_list if f.endswith(('.pth', '.pt', '.bin'))]
-            
-            if not model_files:
-                st.error("❌ No model file found in ZIP archive")
-                return None
-            
-            # Extract the model file
-            model_file_in_zip = model_files[0]
-            zip_ref.extract(model_file_in_zip)
-            
-            # Rename to standard name if needed
-            if model_file_in_zip != MODEL_EXTRACTED_PATH:
-                os.rename(model_file_in_zip, MODEL_EXTRACTED_PATH)
-            
-            extracted_size = os.path.getsize(MODEL_EXTRACTED_PATH)
-            st.success(f"✅ Model extracted successfully! ({extracted_size:,} bytes)")
-            return MODEL_EXTRACTED_PATH
-            
-    except Exception as e:
-        st.error(f"❌ ZIP extraction failed: {e}")
-        return None
+            nn.init.constant_(param.data, 0)
 
-# =========================
-# Load Tokenizer
-# =========================
-@st.cache_resource
-def load_tokenizer():
-    """Load the sentencepiece tokenizer"""
-    if not os.path.exists(SP_MODEL_PATH):
-        try:
-            st.info("📥 Downloading tokenizer...")
-            response = requests.get(SP_MODEL_URL, timeout=30)
-            response.raise_for_status()
-            
-            with open(SP_MODEL_PATH, 'wb') as f:
-                f.write(response.content)
-                
-            st.success("✅ Tokenizer downloaded!")
-        except Exception as e:
-            st.error(f"❌ Tokenizer download failed: {e}")
-            return None
-    
-    try:
-        sp = spm.SentencePieceProcessor()
-        sp.load(SP_MODEL_PATH)
-        st.success("✅ Tokenizer loaded successfully!")
-        return sp
-    except Exception as e:
-        st.error(f"❌ Error loading tokenizer: {e}")
-        return None
-
-# =========================
-# Load Model
-# =========================
-@st.cache_resource
-def load_model(_sp):
-    """Load the seq2seq model with weights"""
-    if _sp is None:
-        st.error("❌ Cannot load model: tokenizer not available")
-        return None
-    
-    # Download and extract model
-    model_path = download_and_extract_model()
-    
-    if model_path is None:
-        st.warning("🔄 Using demonstration model (pretrained weights not available)")
-        return create_test_model(_sp)
-    
-    try:
-        VOCAB_SIZE = _sp.get_piece_size()
-        
-        st.info("🔄 Initializing model architecture...")
-        model = create_model(
-            input_dim=VOCAB_SIZE,
-            output_dim=VOCAB_SIZE,
-            device=DEVICE
-        )
-        
-        st.info("🔄 Loading model weights...")
-        
-        # Load the checkpoint
-        checkpoint = torch.load(model_path, map_location=DEVICE, weights_only=False)
-        
-        # Load weights into model
-        if 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-            st.success("✅ Loaded from model_state_dict")
-        elif 'state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['state_dict'])
-            st.success("✅ Loaded from state_dict")
-        else:
-            # Assume it's a direct state dict
-            model.load_state_dict(checkpoint)
-            st.success("✅ Loaded from weights file")
-        
-        model.eval()
-        model.to(DEVICE)
-        
-        # Verify model loaded correctly
-        param_count = sum(p.numel() for p in model.parameters())
-        st.success(f"🎉 Model loaded successfully! ({param_count:,} parameters)")
-        
-        return model
-        
-    except Exception as e:
-        st.error(f"❌ Model loading failed: {e}")
-        st.warning("🔄 Falling back to demonstration model...")
-        return create_test_model(_sp)
-
-def create_test_model(sp):
-    """Create a minimal model for demonstration purposes"""
-    if sp is None:
-        return None
-        
-    VOCAB_SIZE = sp.get_piece_size()
-    
-    st.info("🔧 Creating demonstration model...")
-    
-    model = create_model(
-        input_dim=VOCAB_SIZE,
-        output_dim=VOCAB_SIZE,
-        device=DEVICE,
-        enc_hid_dim=128,  # Smaller for demo
-        dec_hid_dim=128,
-        emb_dim=64,
-        enc_layers=1,
-        dec_layers=2
-    )
-    
-    model.eval()
-    model.to(DEVICE)
-    
-    demo_param_count = sum(p.numel() for p in model.parameters())
-    st.info(f"🔧 Demonstration model created ({demo_param_count:,} parameters)")
-    
     return model
-
-# =========================
-# Translation Function
-# =========================
-def translate_sentence(sentence, max_len=50):
-    """Translate a single sentence"""
-    if sp is None or model is None:
-        return "Error: Model or tokenizer not loaded"
-    
-    try:
-        # Tokenize input
-        tokens = sp.encode(sentence, out_type=int)
-        
-        # Create source tensor with SOS and EOS
-        src_tensor = torch.LongTensor([sp.bos_id()] + tokens + [sp.eos_id()]).to(DEVICE)
-        src_tensor = src_tensor.unsqueeze(1)  # Add batch dimension [seq_len, 1]
-        
-        with torch.no_grad():
-            # Encode the source
-            encoder_outputs, hidden, cell = model.encoder(src_tensor)
-            
-            # Prepare decoder initial states
-            hidden = hidden.unsqueeze(0).repeat(model.decoder.rnn.num_layers, 1, 1)
-            cell = cell.unsqueeze(0).repeat(model.decoder.rnn.num_layers, 1, 1)
-            
-            # Start with SOS token
-            input_tensor = torch.LongTensor([sp.bos_id()]).to(DEVICE)
-            translated_tokens = []
-            
-            # Generate translation token by token
-            for i in range(max_len):
-                output, hidden, cell = model.decoder(input_tensor, hidden, cell, encoder_outputs)
-                pred_token = output.argmax(1).item()
-                
-                # Stop if EOS token is generated
-                if pred_token == sp.eos_id():
-                    break
-                
-                translated_tokens.append(pred_token)
-                input_tensor = torch.LongTensor([pred_token]).to(DEVICE)
-        
-        # Decode the tokens to text
-        translated_text = sp.decode(translated_tokens) if translated_tokens else ""
-        return translated_text
-        
-    except Exception as e:
-        return f"Translation error: {e}"
-
-# =========================
-# Streamlit App
-# =========================
-st.set_page_config(
-    page_title="Seq2Seq Translator",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-st.title("🧠 Seq2Seq Neural Machine Translator")
-st.markdown("---")
-
-# =========================
-# Load Resources
-# =========================
-if 'resources_loaded' not in st.session_state:
-    st.session_state.resources_loaded = False
-
-# Sidebar for status
-st.sidebar.title("🔧 System Status")
-
-if not st.session_state.resources_loaded:
-    with st.sidebar:
-        with st.spinner("🔄 Loading tokenizer..."):
-            sp = load_tokenizer()
-        
-        with st.spinner("🔄 Loading model..."):
-            model = load_model(sp)
-    
-    if sp is not None and model is not None:
-        st.session_state.resources_loaded = True
-        st.session_state.sp = sp
-        st.session_state.model = model
-    else:
-        st.sidebar.error("❌ Failed to load resources")
-
-# Get resources from session state
-sp = st.session_state.get('sp')
-model = st.session_state.get('model')
-
-# Display status in sidebar
-if sp and model:
-    st.sidebar.success("✅ System Ready!")
-    st.sidebar.info(f"**Vocabulary size:** {sp.get_piece_size()}")
-    
-    param_count = sum(p.numel() for p in model.parameters())
-    st.sidebar.info(f"**Model parameters:** {param_count:,}")
-    
-    if param_count < 1000000:
-        st.sidebar.warning("⚠️ Using demonstration model")
-    else:
-        st.sidebar.success("✅ Using pretrained model!")
-else:
-    st.sidebar.error("❌ System not ready")
-
-# =========================
-# Main Translation Interface
-# =========================
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.subheader("📥 Input Text")
-    
-    if sp is None or model is None:
-        st.error("Please wait while the model loads...")
-    
-    # Quick examples
-    st.markdown("**Quick examples:**")
-    example_cols = st.columns(3)
-    examples = ["Hello", "Thank you", "How are you?"]
-    
-    for i, example in enumerate(examples):
-        with example_cols[i]:
-            if st.button(example, key=f"ex_{i}"):
-                if 'input_text' not in st.session_state:
-                    st.session_state.input_text = ""
-                st.session_state.input_text = example
-    
-    # Text input
-    user_input = st.text_area(
-        "Enter text to translate:",
-        height=120,
-        value=st.session_state.get('input_text', ''),
-        placeholder="Type your text here...",
-        key="main_input"
-    )
-
-with col2:
-    st.subheader("📤 Translation Result")
-    
-    translate_btn = st.button(
-        "🚀 Translate", 
-        type="primary", 
-        use_container_width=True,
-        disabled=not (sp and model)
-    )
-    
-    if translate_btn:
-        if not user_input.strip():
-            st.warning("⚠️ Please enter some text to translate")
-        else:
-            with st.spinner("🔍 Translating..."):
-                translation = translate_sentence(user_input)
-            
-            if translation.startswith("Translation error:"):
-                st.error(f"❌ {translation}")
-            else:
-                st.success("✅ Translation completed!")
-                st.text_area(
-                    "Translation:",
-                    translation,
-                    height=120,
-                    key="translation_output"
-                )
-
-# =========================
-# File Information
-# =========================
-with st.expander("📁 File Information"):
-    st.write("**Current files:**")
-    
-    files_to_check = [
-        (SP_MODEL_PATH, "Tokenizer"),
-        (MODEL_ZIP_PATH, "Model ZIP"),
-        (MODEL_EXTRACTED_PATH, "Extracted Model")
-    ]
-    
-    for file_path, description in files_to_check:
-        if os.path.exists(file_path):
-            size = os.path.getsize(file_path)
-            st.write(f"✅ **{description}:** {size:,} bytes")
-        else:
-            st.write(f"❌ **{description}:** Not found")
-    
-    # Clear cache button
-    if st.button("🔄 Clear Cache and Reload"):
-        for file_path in [MODEL_ZIP_PATH, MODEL_EXTRACTED_PATH]:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        st.session_state.resources_loaded = False
-        st.rerun()
-
-# =========================
-# Footer
-# =========================
-st.markdown("---")
-st.markdown("""
-<div style="text-align: center; color: gray;">
-    Built with ❤️ using Streamlit • PyTorch • SentencePiece
-</div>
-""", unsafe_allow_html=True)
