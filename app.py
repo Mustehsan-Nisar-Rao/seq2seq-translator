@@ -337,7 +337,7 @@ with col1:
     # Quick examples
     st.markdown("**Quick examples:**")
     example_cols = st.columns(3)
-    examples = ["Hello", "Thank you", "How are you?"]
+    examples = ["آج موسم بہت خوشگوار ہے", "Thank you", "How are you?"]
     
     for i, example in enumerate(examples):
         with example_cols[i]:
