@@ -7,7 +7,7 @@ import zipfile
 from model import create_model
 
 # =========================
-# Configuration - UPDATED URLs
+# Configuration - CORRECTED URLs
 # =========================
 SP_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/raw/main/joint_char.model"
 MODEL_WITH_ATTENTION_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v.1/best_model.zip"
@@ -124,40 +124,59 @@ def download_model_without_attention():
             st.warning("⚠️ Existing non-attention model file seems small, re-downloading...")
             os.remove(MODEL_WITHOUT_ATTENTION_PATH)
 
-    try:
-        st.info("📥 Downloading non-attention model...")
-        response = requests.get(MODEL_WITHOUT_ATTENTION_URL, stream=True, timeout=60)
-        response.raise_for_status()
+    # Try multiple URL patterns
+    url_patterns = [
+        "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v.2/best_seq2seq.pth",
+        "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v2/best_seq2seq.pth",
+        "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/latest/best_seq2seq.pth"
+    ]
+    
+    successful_download = False
+    
+    for model_url in url_patterns:
+        try:
+            st.info(f"📥 Trying to download non-attention model from: {model_url}")
+            response = requests.get(model_url, stream=True, timeout=60)
+            
+            if response.status_code == 200:
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                progress_bar = st.progress(0)
+                status_text = st.empty()
 
-        total_size = int(response.headers.get('content-length', 0))
-        downloaded = 0
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+                with open(MODEL_WITHOUT_ATTENTION_PATH, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                progress = downloaded / total_size
+                                progress_bar.progress(progress)
+                                status_text.text(f"Downloaded: {downloaded:,}/{total_size:,} bytes")
 
-        with open(MODEL_WITHOUT_ATTENTION_PATH, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        progress = downloaded / total_size
-                        progress_bar.progress(progress)
-                        status_text.text(f"Downloaded: {downloaded:,}/{total_size:,} bytes")
+                progress_bar.empty()
+                status_text.empty()
 
-        progress_bar.empty()
-        status_text.empty()
+                final_size = os.path.getsize(MODEL_WITHOUT_ATTENTION_PATH)
+                if total_size > 0 and final_size != total_size:
+                    st.warning(f"⚠️ Download from {model_url} incomplete, trying next URL...")
+                    continue
 
-        final_size = os.path.getsize(MODEL_WITHOUT_ATTENTION_PATH)
-        if total_size > 0 and final_size != total_size:
-            st.error("❌ Non-attention model download incomplete")
-            return None
+                st.success(f"✅ Non-attention model downloaded successfully from {model_url}! ({final_size:,} bytes)")
+                successful_download = True
+                break
+            else:
+                st.warning(f"⚠️ URL {model_url} returned status {response.status_code}, trying next...")
+                
+        except Exception as e:
+            st.warning(f"⚠️ Failed to download from {model_url}: {e}, trying next URL...")
+            continue
 
-        st.success(f"✅ Non-attention model downloaded successfully! ({final_size:,} bytes)")
-        return MODEL_WITHOUT_ATTENTION_PATH
-
-    except Exception as e:
-        st.error(f"❌ Non-attention model download failed: {e}")
+    if not successful_download:
+        st.error("❌ All non-attention model download attempts failed")
         return None
+
+    return MODEL_WITHOUT_ATTENTION_PATH
 
 # =========================
 # Load Tokenizer
@@ -492,6 +511,10 @@ with st.expander("📁 File Information"):
             st.write(f"✅ **{description}:** {size:,} bytes")
         else:
             st.write(f"❌ **{description}:** Not found")
+    
+    st.write("**Manual URL Check:**")
+    st.code("https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v.2/best_seq2seq.pth")
+    
     if st.button("🔄 Clear Cache and Reload"):
         for file_path in [MODEL_WITH_ATTENTION_ZIP_PATH, MODEL_WITH_ATTENTION_EXTRACTED_PATH, MODEL_WITHOUT_ATTENTION_PATH]:
             if os.path.exists(file_path):
