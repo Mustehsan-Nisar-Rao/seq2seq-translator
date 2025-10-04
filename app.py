@@ -7,13 +7,11 @@ import zipfile
 from model import create_model
 
 # =========================
-# Configuration
+# Configuration - UPDATED URLs
 # =========================
-SP_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/blob/main/joint_char.model"
+SP_MODEL_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/raw/main/joint_char.model"
 MODEL_WITH_ATTENTION_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v.1/best_model.zip"
 MODEL_WITHOUT_ATTENTION_URL = "https://github.com/Mustehsan-Nisar-Rao/seq2seq-translator/releases/download/v.2/best_seq2seq.pth"
-
-
 
 SP_MODEL_PATH = "joint_char.model"
 MODEL_WITH_ATTENTION_ZIP_PATH = "best_model.zip"
